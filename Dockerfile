@@ -15,8 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend source
 COPY backend/ .
 
+# Collect static files
 RUN python manage.py collectstatic --noinput --settings=truckrouter.settings || true
 
 EXPOSE 8000
 
-CMD ["gunicorn", "truckrouter.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && gunicorn truckrouter.wsgi:application --bind 0.0.0.0:8000 --workers 2"]
