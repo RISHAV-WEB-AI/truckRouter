@@ -15,8 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend source
 COPY backend/ .
 
-# Collect static files
-RUN python truckrouter/manage.py collectstatic --noinput --settings=truckrouter.settings || true
+RUN python manage.py collectstatic --noinput --settings=truckrouter.settings || true
 
 EXPOSE 8000
 
