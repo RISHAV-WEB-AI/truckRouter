@@ -1,5 +1,13 @@
-FROM python:3.11-slim
+# ── Stage 1: Build React Frontend ─────────────────────────
+FROM node:20-slim AS frontend-builder
+WORKDIR /frontend
+COPY frontend/package*.json ./
+RUN npm install
+COPY frontend/ ./
+RUN npm run build
 
+# ── Stage 2: Python / Django Production Server ───────────
+FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies
@@ -14,6 +22,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend source
 COPY backend/ .
+
+# Copy built React frontend into Django app directory
+COPY --from=frontend-builder /frontend/dist /app/frontend_dist
 
 # Collect static files
 RUN python manage.py collectstatic --noinput --settings=truckrouter.settings || true
