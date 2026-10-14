@@ -67,7 +67,9 @@ services:
   - type: redis
     name: truckrouter-redis
     plan: free
+    ipAllowList: []
 
 databases:
   - name: truckrouter-db
     plan: free
+    ipAllowList: []
