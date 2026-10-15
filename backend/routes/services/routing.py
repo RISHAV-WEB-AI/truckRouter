@@ -226,8 +226,9 @@ def get_routes(
 
     if not routes:
         raise ValueError(
-            f'Could not compute any route between "{origin_coords}" and "{dest_coords}". '
-            'Check that ORS_API_KEY is set and both locations are reachable by road.'
+            'No contiguous road route could be found between origin and destination. '
+            'Please ensure both locations are reachable by highway on the same landmass '
+            '(e.g., "Chicago, IL" to "Dallas, TX").'
         )
 
     return routes
