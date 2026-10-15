@@ -1,4 +1,5 @@
 import uuid
+import socket
 import threading
 import logging
 from rest_framework.views import APIView
@@ -7,9 +8,18 @@ from rest_framework import status
 
 from .models import RouteJob
 from .serializers import RouteRequestSerializer, RouteJobSerializer
-from .tasks import compute_routes
+from .tasks import compute_routes, run_compute_routes
 
 logger = logging.getLogger(__name__)
+
+
+def _redis_available() -> bool:
+    """Quick non-blocking check for a local Redis server."""
+    try:
+        with socket.create_connection(('localhost', 6379), timeout=0.3):
+            return True
+    except Exception:
+        return False
 
 
 class RouteCreateView(APIView):
@@ -31,23 +41,19 @@ class RouteCreateView(APIView):
         )
 
         task_id = str(uuid.uuid4())
-        import socket
-        redis_available = False
-        try:
-            with socket.create_connection(('localhost', 6379), timeout=0.2):
-                redis_available = True
-        except Exception:
-            pass
 
-        if redis_available:
+        if _redis_available():
             try:
                 task = compute_routes.delay(job.id)
                 task_id = task.id
+                logger.info('Job %d dispatched to Celery task %s', job.id, task_id)
             except Exception as e:
-                logger.info('Celery dispatch failed: %s', e)
-                threading.Thread(target=compute_routes, args=(job.id,), daemon=True).start()
+                logger.warning('Celery dispatch failed (%s); falling back to thread', e)
+                threading.Thread(target=run_compute_routes, args=(job.id,), daemon=True).start()
         else:
-            threading.Thread(target=compute_routes, args=(job.id,), daemon=True).start()
+            # Free Render tier: no Redis/Celery — run in background thread
+            logger.info('No Redis detected; running job %d in background thread', job.id)
+            threading.Thread(target=run_compute_routes, args=(job.id,), daemon=True).start()
 
         job.task_id = task_id
         job.save(update_fields=['task_id'])

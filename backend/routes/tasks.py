@@ -1,6 +1,6 @@
 from celery import shared_task
 from datetime import datetime, timezone
-from django.conf import settings
+from concurrent.futures import ThreadPoolExecutor
 import logging
 
 from .models import RouteJob
@@ -19,16 +19,9 @@ INTERVAL_MAP = {
 METRES_PER_MILE = 1609.344
 
 
-@shared_task(bind=True, max_retries=3)
-def compute_routes(self, job_id: int):
+def run_compute_routes(job_id: int):
     """
-    Main Celery task:
-    1. Geocode origin & destination
-    2. Fetch up to 3 route options from ORS
-    3. Sample weather checkpoints
-    4. Classify risk at each checkpoint
-    5. Pick recommended route
-    6. Store result on RouteJob
+    Core logic for computing routes, shared by both Celery task and thread fallback.
     """
     try:
         job = RouteJob.objects.get(id=job_id)
@@ -67,8 +60,6 @@ def compute_routes(self, job_id: int):
             )
 
             # 4. Weather + risk at each checkpoint (concurrently)
-            from concurrent.futures import ThreadPoolExecutor
-
             def _enrich_single(cp):
                 try:
                     eta_ts = int(datetime.fromisoformat(cp['eta']).timestamp())
@@ -112,7 +103,7 @@ def compute_routes(self, job_id: int):
         job.save(update_fields=['status', 'result'])
 
     except Exception as exc:
-        logger.exception('compute_routes task failed for job %s', job_id)
+        logger.exception('compute_routes failed for job %s', job_id)
         try:
             job = RouteJob.objects.get(id=job_id)
             job.status = 'error'
@@ -120,4 +111,13 @@ def compute_routes(self, job_id: int):
             job.save(update_fields=['status', 'result'])
         except Exception:
             pass
-        raise self.retry(exc=exc, countdown=10)
+
+
+@shared_task(bind=True, max_retries=2)
+def compute_routes(self, job_id: int):
+    """Celery task wrapper — calls run_compute_routes, retries on failure."""
+    try:
+        run_compute_routes(job_id)
+    except Exception as exc:
+        logger.exception('Celery compute_routes task failed for job %s', job_id)
+        raise self.retry(exc=exc, countdown=15)
