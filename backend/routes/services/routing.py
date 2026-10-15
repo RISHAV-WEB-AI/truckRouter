@@ -11,20 +11,79 @@ logger = logging.getLogger(__name__)
 ORS_BASE = 'https://api.openrouteservice.org/v2'
 
 
+_GEOCODE_CACHE: dict[str, tuple[float, float]] = {
+    'chicago, il': (-87.6298, 41.8781),
+    'dallas, tx': (-96.7970, 32.7767),
+    'new york, ny': (-74.0060, 40.7128),
+    'los angeles, ca': (-118.2437, 34.0522),
+    'houston, tx': (-95.3698, 29.7604),
+    'phoenix, az': (-112.0740, 33.4484),
+    'philadelphia, pa': (-75.1652, 39.9526),
+    'san antonio, tx': (-98.4936, 29.4241),
+    'san diego, ca': (-117.1611, 32.7157),
+    'denver, co': (-104.9903, 39.7392),
+    'atlanta, ga': (-84.3880, 33.7490),
+}
+
+
 def geocode(place: str) -> tuple[float, float]:
-    """Return (lon, lat) for a place name using Nominatim."""
-    url = 'https://nominatim.openstreetmap.org/search'
-    resp = requests.get(
-        url,
-        params={'q': place, 'format': 'json', 'limit': 1},
-        headers={'User-Agent': 'TruckRouter/1.0'},
-        timeout=10,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if not data:
-        raise ValueError(f'Could not geocode: {place}')
-    return float(data[0]['lon']), float(data[0]['lat'])
+    """
+    Return (lon, lat) for a place name using:
+    1. Instant memory cache
+    2. Authenticated OpenRouteService Geocoding API (using ORS_API_KEY)
+    3. Nominatim with custom User-Agent
+    """
+    clean = place.strip().lower()
+    if clean in _GEOCODE_CACHE:
+        return _GEOCODE_CACHE[clean]
+
+    # 1. Use ORS authenticated geocoding API (never rate-limited by Nominatim)
+    if settings.ORS_API_KEY:
+        try:
+            ors_url = 'https://api.openrouteservice.org/geocode/search'
+            resp = requests.get(
+                ors_url,
+                params={'api_key': settings.ORS_API_KEY, 'text': place, 'size': 1},
+                timeout=8,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                features = data.get('features', [])
+                if features:
+                    coords = features[0]['geometry']['coordinates']
+                    res = (float(coords[0]), float(coords[1]))
+                    _GEOCODE_CACHE[clean] = res
+                    return res
+        except Exception as e:
+            logger.warning('ORS geocoding failed: %s', e)
+
+    # 2. Fallback: Nominatim with custom User-Agent
+    try:
+        url = 'https://nominatim.openstreetmap.org/search'
+        resp = requests.get(
+            url,
+            params={'q': place, 'format': 'json', 'limit': 1},
+            headers={'User-Agent': 'TruckRouterApp/2.0 (contact: info@spotter.ai)'},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data:
+                res = (float(data[0]['lon']), float(data[0]['lat']))
+                _GEOCODE_CACHE[clean] = res
+                return res
+    except Exception as e:
+        logger.warning('Nominatim fallback geocoding failed: %s', e)
+
+    # 3. Direct coordinates check (e.g. "41.8781, -87.6298")
+    try:
+        parts = [float(x.strip()) for x in place.split(',')]
+        if len(parts) == 2:
+            return (parts[1], parts[0])
+    except Exception:
+        pass
+
+    raise ValueError(f'Could not find coordinates for "{place}". Please enter a city and state like "Chicago, IL".')
 
 
 def _request_single_route(coordinates: list[list[float]]) -> dict | None:
